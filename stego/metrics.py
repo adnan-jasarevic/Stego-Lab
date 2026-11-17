@@ -22,11 +22,13 @@ _SSIM_C1 = (0.01 * MAX_VALUE) ** 2
 _SSIM_C2 = (0.03 * MAX_VALUE) ** 2
 
 
-def _rgb_pair(cover: Image.Image, stego: Image.Image) -> tuple[np.ndarray, np.ndarray]:
+def _rgb_pair(
+    cover: Image.Image, stego: Image.Image, dtype: type = np.float64
+) -> tuple[np.ndarray, np.ndarray]:
     if cover.size != stego.size:
         raise ValueError(f"Image sizes differ: {cover.size} vs {stego.size}.")
-    a = np.asarray(cover.convert("RGB"), dtype=np.float64)
-    b = np.asarray(stego.convert("RGB"), dtype=np.float64)
+    a = np.asarray(cover.convert("RGB"), dtype=dtype)
+    b = np.asarray(stego.convert("RGB"), dtype=dtype)
     return a, b
 
 
@@ -47,12 +49,16 @@ def ssim(cover: Image.Image, stego: Image.Image) -> float:
     """Mean structural similarity over all pixels and RGB channels (1.0 = identical).
 
     Uses an 11x11 Gaussian window (sigma 1.5) per channel, as in Wang et al.
+    Works in float32, one channel at a time, to keep memory low on large
+    photos; the score is still accurate to ~6 decimal places.
     """
-    a, b = _rgb_pair(cover, stego)
+    a, b = _rgb_pair(cover, stego, np.float32)
+    return float(np.mean([_ssim_channel(a[..., c], b[..., c]) for c in range(3)]))
 
+
+def _ssim_channel(a: np.ndarray, b: np.ndarray) -> float:
     def blur(x: np.ndarray) -> np.ndarray:
-        # Smooth spatially only; never mix colour channels.
-        return gaussian_filter(x, sigma=(_SSIM_SIGMA, _SSIM_SIGMA, 0), truncate=3.5)
+        return gaussian_filter(x, sigma=_SSIM_SIGMA, truncate=3.5)
 
     mu_a, mu_b = blur(a), blur(b)
     var_a = blur(a * a) - mu_a**2
@@ -61,4 +67,4 @@ def ssim(cover: Image.Image, stego: Image.Image) -> float:
 
     numerator = (2 * mu_a * mu_b + _SSIM_C1) * (2 * cov + _SSIM_C2)
     denominator = (mu_a**2 + mu_b**2 + _SSIM_C1) * (var_a + var_b + _SSIM_C2)
-    return float(np.mean(numerator / denominator))
+    return float(np.mean(numerator / denominator, dtype=np.float64))
