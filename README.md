@@ -100,3 +100,7 @@ stego/metrics.py      MSE, PSNR, SSIM
 stego/steganalysis.py bit planes, chi-square, RS analysis
 tests/                pytest suite (images.py = synthetic test photos)
 ```
+
+## License
+
+[MIT](LICENSE)
