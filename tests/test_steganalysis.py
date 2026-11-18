@@ -75,3 +75,45 @@ def test_lsb_matching_evades_both_attacks_at_full_capacity(photo):
     # Replacement at the same rate scores > 0.99 on both; matching stays far below.
     assert sa.chi_square_probability(stego) < 0.9
     assert sa.rs_estimate(stego) < 0.15
+
+
+# ---------------------------------------------------------------- JPEG calibration
+
+
+def _jpeg(seed: int, quality: int) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    photo_like(seed, size=512).save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _low_frequency_coefficients(data: bytes) -> np.ndarray:
+    import tempfile
+
+    from stego import jpeg
+
+    with tempfile.TemporaryDirectory() as tmp:
+        y = jpeg._read(data, tmp).Y
+    return np.stack([y[..., r, c].reshape(-1) for r, c in sa._CALIBRATION_MODES])
+
+
+@pytest.mark.parametrize("quality", [75, 90])
+@pytest.mark.parametrize("seed", range(3))
+def test_calibration_stays_low_on_clean_jpegs(seed, quality):
+    assert sa.jpeg_calibration_estimate(_jpeg(seed, quality)) < 0.06
+
+
+@pytest.mark.parametrize("fill", [0.4, 1.0])
+@pytest.mark.parametrize("seed", range(3))
+def test_calibration_tracks_true_f5_change_rate(seed, fill):
+    from stego import jpeg
+
+    cover = _jpeg(seed, 80)
+    stego = jpeg.embed(cover, "x" * int(jpeg.capacity_bytes(cover) * fill), "pw")
+    before, after = _low_frequency_coefficients(cover), _low_frequency_coefficients(stego)
+    true_rate = np.count_nonzero(after != before) / np.count_nonzero(before)
+
+    estimate = sa.jpeg_calibration_estimate(stego)
+    assert estimate == pytest.approx(true_rate, abs=0.1)
+    assert estimate > 0.1

@@ -4,3 +4,4 @@ cryptography>=44.0
 streamlit>=1.40
 scipy>=1.14
 pytest>=8.0
+jpeglib>=1.0.2
