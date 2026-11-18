@@ -6,6 +6,8 @@
   this has happened.
 - rs_estimate: Fridrich, Goljan & Du (2001). Estimates the fraction of values
   that carry hidden bits from how flipping LSBs changes local smoothness.
+- jpeg_calibration_estimate: Fridrich, Goljan & Hogea (2002). Estimates the
+  share of DCT coefficients changed by F5-style JPEG embedding.
 
 Both statistical attacks target LSB replacement. LSB matching (used by
 stego.lsb) does not create the pair symmetry they rely on.
@@ -137,3 +139,58 @@ def rs_estimate(image: Image.Image) -> float:
     """Estimated fraction (0-1) of RGB values carrying hidden bits, averaged over channels."""
     rgb = _rgb(image)
     return float(np.mean([_rs_channel(rgb[..., c]) for c in range(3)]))
+
+
+# ---------------------------------------------------------------- JPEG calibration
+
+# Low-frequency DCT modes used by the attack: (row, column) inside each 8x8 block.
+_CALIBRATION_MODES = ((0, 1), (1, 0), (1, 1))
+
+
+def _abs_histogram(blocks: np.ndarray, mode: tuple[int, int]) -> np.ndarray:
+    """Share of blocks whose coefficient at `mode` has |value| = 0, 1, 2."""
+    values = np.abs(blocks[..., mode[0], mode[1]].reshape(-1))
+    return np.array([np.count_nonzero(values == d) for d in (0, 1, 2)]) / values.size
+
+
+def _calibrated_luminance(path: str, workdir: str) -> tuple[np.ndarray, np.ndarray]:
+    """Luminance DCT blocks of the image and of its cropped, recompressed version."""
+    import jpeglib
+
+    original = jpeglib.read_dct(path)
+    luminance_qt = original.qt[original.quant_tbl_no[0]]
+    gray = jpeglib.read_spatial(path, out_color_space=jpeglib.JCS_GRAYSCALE).spatial[..., 0]
+
+    cropped = np.ascontiguousarray(gray[4:, 4:, None])
+
+    recompressed = f"{workdir}/calibrated.jpg"
+    jpeglib.from_spatial(
+        cropped, in_color_space=jpeglib.JCS_GRAYSCALE
+    ).write_spatial(recompressed, qt=luminance_qt[None])
+    return original.Y, jpeglib.read_dct(recompressed).Y
+
+
+def jpeg_calibration_estimate(data: bytes) -> float:
+    """Estimated share (0-1) of non-zero AC coefficients changed by F5-style embedding.
+
+    Fridrich, Goljan & Hogea (2002): cropping 4 pixels and recompressing with
+    the same quantisation table yields an image whose coefficient histogram
+    approximates the cover's. F5 moves coefficients towards zero, so the stego
+    image has too many 0s and too few 1s compared with that estimate.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as workdir:
+        path = f"{workdir}/input.jpg"
+        with open(path, "wb") as f:
+            f.write(data)
+        stego, calibrated = _calibrated_luminance(path, workdir)
+
+    estimates = []
+    for mode in _CALIBRATION_MODES:
+        h = _abs_histogram(stego, mode)
+        c = _abs_histogram(calibrated, mode)
+        denominator = c[1] ** 2 + (c[2] - c[1]) ** 2
+        if denominator > 0:
+            estimates.append((c[1] * (h[0] - c[0]) + (h[1] - c[1]) * (c[2] - c[1])) / denominator)
+    return float(np.clip(np.mean(estimates), 0.0, 1.0)) if estimates else 0.0
